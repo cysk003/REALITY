@@ -32,6 +32,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pires/go-proxyproto"
@@ -358,9 +359,33 @@ func Server(ctx context.Context, conn net.Conn, config *Config) (*Conn, error) {
 			if config.Show {
 				fmt.Printf("REALITY remoteAddr: %v\ths.handshake() err: %v\n", remoteAddr, err)
 			}
-			if err == nil {
-				handled = true
+			if err != nil {
+				break
 			}
+			if len(s2cSaved) > 0 {
+				if _, err = io.ReadAtLeast(target, buf, handshakeLen-len(s2cSaved)); err != nil {
+					break
+				}
+			}
+			go func() { // TODO: Probe target's maxUselessRecords and some time-outs in advance.
+				start := time.Now()
+				n, err := target.Read(buf)
+				if err != nil && !hs.c.handshakeComplete() {
+					conn.Close()
+				}
+				if config.Show {
+					fmt.Printf("REALITY remoteAddr: %v\ttime.Since(start): %v\tn: %v\terr: %v\n", remoteAddr, time.Since(start), n, err)
+				}
+			}()
+			err = hs.readClientFinished()
+			if config.Show {
+				fmt.Printf("REALITY remoteAddr: %v\ths.readClientFinished() err: %v\n", remoteAddr, err)
+			}
+			if err != nil {
+				break
+			}
+			atomic.StoreUint32(&hs.c.handshakeStatus, 1)
+			handled = true
 			break
 		}
 		if done {
